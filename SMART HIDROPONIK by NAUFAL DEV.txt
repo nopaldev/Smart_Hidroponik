@@ -1,0 +1,353 @@
+///////////  CREATE BY NAUFAL SADAM aka NAUFAL DEV //////////////
+///////////  HIDROPONIK MONITORING   //////////////
+//// SKEMA KABEL KE ESP 32 TERHADAP SETIAP RANGKAIAN SENSOR  ////
+///////////  CREATE BY NAUFAL SADAM aka NAUFAL DEV //////////////
+///////////  HIDROPONIK MONITORING   //////////////
+//// SKEMA KABEL KE ESP 32 TERHADAP SETIAP RANGKAIAN SENSOR  ////
+
+// Blynk Tokenisasi
+#define BLYNK_TEMPLATE_ID "TMPL6qfzBBP-g"
+#define BLYNK_TEMPLATE_NAME "MONITORING HIDROPONIK"
+#define BLYNK_AUTH_TOKEN "Ro_tuAomEmVK4IxJ6mSl8QzBFe-LbxYb"
+
+// WiFi Credentials
+#define WIFI_SSID "Iskandar House" /// GANTI DENGAN NAMA WIFI ANDA SENDIRI MISAL "wifi rumah"
+#define WIFI_PASS "iskandar123" /// GANTI DENGAN PASSWORD WIFI ANDA
+
+#define BLYNK_PRINT Serial
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <BlynkSimpleEsp32.h>
+#include <U8g2lib.h>
+#include <DHT.h>
+#include <Wire.h> // tds
+#include <EEPROM.h>//menyimpan kalibrasi tds
+
+#define EEPROM_SIZE 4
+
+// Pin Definitions
+#define RELAY1 26
+#define RELAY2 25
+#define RELAY3 33
+#define RELAY4 32
+#define DHTPIN 4
+#define DHTTYPE DHT11
+#define BUZZER_PIN 5
+#define LED_PIN 23
+#define TRIG_PIN 14
+#define ECHO_PIN 27
+#define MAX_WATER_HEIGHT 10.0 // mengatur level tinggi maksimal air
+#define CONTAINER_HEIGHT 10.0 // mengatur tinggi wadah toren air, level tinggi air = tinggi toren - 10 atau 20%
+#define TDS_PIN 34 // pin tds
+
+#define SAMPLES 200  // Ambil 200 sampel dari sensor untuk perhitungan rata-rata, semakin banyak semakin stabil pembacaan
+#define MOVING_AVG_SIZE 10  // Buffer ukuran 10 untuk moving average
+
+float tdsCalibrationFactor = 40.00;  //ini setting awal kalibrasinya, tapi di ketemu nilai ppm pas di angka 32.30, boleh di sesuaikan
+float movingAvgBuffer[MOVING_AVG_SIZE];  // Buffer untuk moving average
+int movingAvgIndex = 0;
+
+
+// Inisialisasi DHT dan OLED
+DHT dht(DHTPIN, DHTTYPE);
+U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
+
+void setup() {
+  Serial.begin(115200);
+
+  // Inisialisasi Blynk
+  Blynk.begin(BLYNK_AUTH_TOKEN, WIFI_SSID, WIFI_PASS);
+
+  // Inisialisasi relay pins
+  pinMode(RELAY1, OUTPUT);
+  pinMode(RELAY2, OUTPUT);
+  pinMode(RELAY3, OUTPUT);
+  pinMode(RELAY4, OUTPUT);
+  
+  // Inisialisasi Buzzer & LED
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(LED_PIN, OUTPUT);
+
+  // Inisialisasi Ultrasonik
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  // Inisalisasi pin tds
+  pinMode(TDS_PIN, INPUT);
+
+  //inisalisasi kalibrasi tds
+  EEPROM.begin(EEPROM_SIZE);
+  EEPROM.get(0, tdsCalibrationFactor);
+  if (isnan(tdsCalibrationFactor) || tdsCalibrationFactor == 0) {
+    tdsCalibrationFactor = 1.0;
+  }
+  
+  Serial.print("Faktor Kalibrasi Saat Startup: ");
+  Serial.println(tdsCalibrationFactor);
+
+  // Set initial states
+  digitalWrite(RELAY1, LOW);
+  digitalWrite(RELAY2, LOW);
+  digitalWrite(RELAY3, LOW);
+  digitalWrite(RELAY4, LOW);
+  digitalWrite(BUZZER_PIN, LOW);
+  digitalWrite(LED_PIN, LOW);
+
+  // Initialize DHT and OLED
+  dht.begin();
+  u8g2.begin();
+
+  // Display animasi
+  animateRobotEyes();
+
+  // Teks Setelah Animasi
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_ncenB08_tr);
+  int textWidth = u8g2.getStrWidth("NAUFAL DEV");
+  u8g2.drawStr((128 - textWidth) / 2, 32, "NAUFAL DEV");
+  u8g2.sendBuffer();
+  delay(2000);
+}
+
+void loop() {
+  Blynk.run();
+  handleCalibration();  // Tambahkan ini agar bisa menerima perintah kalibrasi dari Serial Monitor
+  // membaca temperatur dan kelembaban
+  float temp = dht.readTemperature();
+  float humidity = dht.readHumidity();
+  float waterLevel = getWaterLevelPercentage();
+  float tdsValue = readTDS(); // tds
+
+  // Mengirim data ke Blynk menggunakan Virutal Pin
+  Blynk.virtualWrite(V8, humidity);  // Humidity di V8
+  Blynk.virtualWrite(V9, temp);      // Temperature di V9
+  Blynk.virtualWrite(V10, waterLevel);// Ultrasonik Water Level di V10
+  Blynk.virtualWrite(V11, tdsValue); // Tds Sensor ke blnk pin virtual 11
+
+    // Update OLED display
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_ncenB08_tr);
+  u8g2.setCursor(0, 15);
+  u8g2.print("Suhu Udara: ");
+  u8g2.print(temp);
+  u8g2.print(" C");
+  u8g2.setCursor(0, 30);
+  u8g2.print("Kelembaban: ");
+  u8g2.print(humidity);
+  u8g2.print(" %");
+  u8g2.setCursor(0, 45);
+  u8g2.print("Level Air: ");
+  u8g2.print(waterLevel);
+  u8g2.print(" %");
+  u8g2.setCursor(0, 60);
+  u8g2.print("TDS Level: ");
+  u8g2.print(tdsValue);
+  u8g2.print(" ppm");
+  u8g2.sendBuffer();
+  
+
+
+  // Automatic alarm for high humidity
+  if (waterLevel < 45) {
+    for (int i = 0; i < 3; i++) {
+      digitalWrite(LED_PIN, HIGH);
+      tone(BUZZER_PIN, 800);
+      delay(200);
+      digitalWrite(LED_PIN, LOW);
+      noTone(BUZZER_PIN);
+      delay(1000);
+    }
+  }
+
+  delay(1000);
+}
+// Rumus Ultrasonik Water Level
+float getWaterLevelPercentage() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  long duration = pulseIn(ECHO_PIN, HIGH);
+  float distance = duration * 0.034 / 2;
+
+  float waterHeight = CONTAINER_HEIGHT - distance;
+  float percentage = (waterHeight / MAX_WATER_HEIGHT) * 100.0;
+
+  if (percentage > 100) percentage = 100;
+  if (percentage < 0) percentage = 0;
+
+  return percentage;
+}
+
+// Rumus Tds Meter
+#define VREF 3.3  // Tegangan referensi ADC ESP32 (hanya untuk 3.3v saja yaa adik adikkkkkkkkkk)
+
+float readTDS() {
+  long totalValue = 0;
+
+  for (int i = 0; i < SAMPLES; i++) {
+    totalValue += analogRead(TDS_PIN);
+    delayMicroseconds(500);
+  }
+
+  int sensorValue = totalValue / SAMPLES;
+  float voltage = sensorValue * VREF / 4095.0;
+
+  float tdsValue = ((133.42 * voltage * voltage * voltage) 
+                   - (255.86 * voltage * voltage) 
+                   + (857.39 * voltage)) * 0.5 * tdsCalibrationFactor;
+
+  if (tdsValue < 0) tdsValue = 0;
+
+  movingAvgBuffer[movingAvgIndex] = tdsValue;
+  movingAvgIndex = (movingAvgIndex + 1) % MOVING_AVG_SIZE;
+
+  float avgTDS = 0;
+  for (int i = 0; i < MOVING_AVG_SIZE; i++) {
+    avgTDS += movingAvgBuffer[i];
+  }
+  avgTDS /= MOVING_AVG_SIZE;
+
+  Serial.print("Sensor Value: ");
+  Serial.print(sensorValue);
+  Serial.print(" | Voltage: ");
+  Serial.print(voltage, 2);
+  Serial.print(" | Faktor Kalibrasi: ");
+  Serial.print(tdsCalibrationFactor);
+  Serial.print(" | TDS (ppm): ");
+  Serial.println(tdsValue);
+
+  return avgTDS;
+}
+
+
+
+
+
+void handleCalibration() {
+  if (Serial.available()) {
+    String input = Serial.readStringUntil('\n');
+    input.trim();
+    if (input.startsWith("kalibrasi:")) {
+      float newCalibration = input.substring(10).toFloat();
+      if (newCalibration > 0) {
+        tdsCalibrationFactor = newCalibration;
+        EEPROM.put(0, tdsCalibrationFactor);
+        EEPROM.commit();
+
+        // Debug: Pastikan nilai tersimpan
+        Serial.print("TDS Kalibrasi diatur ke: ");
+        Serial.println(tdsCalibrationFactor);
+
+        // Baca ulang dari EEPROM untuk memastikan penyimpanan berhasil
+        float checkCalibration;
+        EEPROM.get(0, checkCalibration);
+        Serial.print("Nilai dari EEPROM: ");
+        Serial.println(checkCalibration);
+      } else {
+        Serial.println("Masukkan nilai kalibrasi yang valid.");
+      }
+    }
+  }
+}
+
+
+
+// Fungsi kontrol relay
+BLYNK_WRITE(V1) {
+  int state = param.asInt();
+  digitalWrite(RELAY1, state);
+}
+
+BLYNK_WRITE(V2) {
+  int state = param.asInt();
+  digitalWrite(RELAY2, state);
+}
+
+BLYNK_WRITE(V3) {
+  int state = param.asInt();
+  digitalWrite(RELAY3, state);
+}
+
+BLYNK_WRITE(V4) {
+  int state = param.asInt();
+  digitalWrite(RELAY4, state);
+}
+
+// LED control from Blynk
+BLYNK_WRITE(V5) {
+  int ledState = param.asInt();
+  digitalWrite(LED_PIN, ledState);
+}
+
+// Buzzer control from Blynk
+BLYNK_WRITE(V6) {
+  int buzzerState = param.asInt();
+  if (buzzerState) {
+    tone(BUZZER_PIN, 800);
+  } else {
+    noTone(BUZZER_PIN);
+  }
+}
+
+// Robot eyes animation functions
+void animateRobotEyes() {
+  const int centerY = 32;
+  const int eye1X = 40;
+  const int eye2X = 88;
+  const int LOOK_SPEED = 1500;
+
+  // Look center
+  u8g2.clearBuffer();
+  drawRoundedRobotEyes(eye1X, centerY, eye2X, centerY, 0);
+  u8g2.sendBuffer();
+  delay(LOOK_SPEED);
+  
+  // Look right
+  for(int i = 0; i < 3; i++) {
+    u8g2.clearBuffer();
+    drawRoundedRobotEyes(eye1X + (i*2), centerY, eye2X + (i*2), centerY, 1);
+    u8g2.sendBuffer();
+    delay(LOOK_SPEED/3);
+  }
+
+  // Look left
+  for(int i = 0; i < 6; i++) {
+    u8g2.clearBuffer();
+    drawRoundedRobotEyes(eye1X + (4-(i*2)), centerY, eye2X + (4-(i*2)), centerY, -1);
+    u8g2.sendBuffer();
+    delay(LOOK_SPEED/3);
+  }
+
+  // Look right again
+  for(int i = 0; i < 6; i++) {
+    u8g2.clearBuffer();
+    drawRoundedRobotEyes(eye1X + (-8+(i*2)), centerY, eye2X + (-8+(i*2)), centerY, 1);
+    u8g2.sendBuffer();
+    delay(LOOK_SPEED/3);
+  }
+
+  // Return to center
+  for(int i = 0; i < 3; i++) {
+    u8g2.clearBuffer();
+    drawRoundedRobotEyes(eye1X + (4-(i*2)), centerY, eye2X + (4-(i*2)), centerY, 0);
+    u8g2.sendBuffer();
+    delay(LOOK_SPEED/3);
+  }
+}
+
+void drawRoundedRobotEyes(int x1, int y1, int x2, int y2, int lookDirection) {
+  const int eyeSize = 36;
+  const int radius = 8;
+  
+  int offsetX = 0;
+  switch (lookDirection) {
+    case -1: offsetX = -8; break;
+    case 1:  offsetX = 8; break;
+  }
+  
+  u8g2.drawRBox(x1 + offsetX - eyeSize/2, y1 - eyeSize/2, eyeSize, eyeSize, radius);
+  u8g2.drawRBox(x2 + offsetX - eyeSize/2, y2 - eyeSize/2, eyeSize, eyeSize, radius);
+}
