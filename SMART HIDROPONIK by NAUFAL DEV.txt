@@ -6,9 +6,9 @@
 //// SKEMA KABEL KE ESP 32 TERHADAP SETIAP RANGKAIAN SENSOR  ////
 
 // Blynk Tokenisasi
-#define BLYNK_TEMPLATE_ID "TMPL6qfzBBP-g"
-#define BLYNK_TEMPLATE_NAME "MONITORING HIDROPONIK"
-#define BLYNK_AUTH_TOKEN "Ro_tuAomEmVK4IxJ6mSl8QzBFe-LbxYb"
+#define BLYNK_TEMPLATE_ID "TMPL6qfzBBP-g" /// iki yo ho o ojo lali di ganti
+#define BLYNK_TEMPLATE_NAME "MONITORING HIDROPONIK" /// ganti dengan template blyad masing masing
+#define BLYNK_AUTH_TOKEN "Ro_tuAomEmVK4IxJ6mSl8QzBFe-LbxYb" /// ganti dengan auth token masing masing
 
 // WiFi Credentials
 #define WIFI_SSID "Iskandar House" /// GANTI DENGAN NAMA WIFI ANDA SENDIRI MISAL "wifi rumah"
@@ -22,6 +22,8 @@
 #include <DHT.h>
 #include <Wire.h> // tds
 #include <EEPROM.h>//menyimpan kalibrasi tds
+#include <OneWire.h>
+#include <DallasTemperature.h>
 
 #define EEPROM_SIZE 4
 
@@ -39,6 +41,8 @@
 #define MAX_WATER_HEIGHT 10.0 // mengatur level tinggi maksimal air
 #define CONTAINER_HEIGHT 10.0 // mengatur tinggi wadah toren air, level tinggi air = tinggi toren - 10 atau 20%
 #define TDS_PIN 34 // pin tds
+#define ONE_WIRE_BUS 13  // Pin data sensor suhu air di ESP32
+
 
 #define SAMPLES 200  // Ambil 200 sampel dari sensor untuk perhitungan rata-rata, semakin banyak semakin stabil pembacaan
 #define MOVING_AVG_SIZE 10  // Buffer ukuran 10 untuk moving average
@@ -52,9 +56,13 @@ int movingAvgIndex = 0;
 DHT dht(DHTPIN, DHTTYPE);
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
+// Inisialisasi sensor suhu air
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+
 void setup() {
   Serial.begin(115200);
-
+  sensors.begin();
   // Inisialisasi Blynk
   Blynk.begin(BLYNK_AUTH_TOKEN, WIFI_SSID, WIFI_PASS);
 
@@ -124,6 +132,10 @@ void loop() {
   Blynk.virtualWrite(V10, waterLevel);// Ultrasonik Water Level di V10
   Blynk.virtualWrite(V11, tdsValue); // Tds Sensor ke blnk pin virtual 11
 
+  // sensor suhu air
+  sensors.requestTemperatures();
+  float temperatureC = sensors.getTempCByIndex(0);
+
     // Update OLED display
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_ncenB08_tr);
@@ -132,9 +144,9 @@ void loop() {
   u8g2.print(temp);
   u8g2.print(" C");
   u8g2.setCursor(0, 30);
-  u8g2.print("Kelembaban: ");
-  u8g2.print(humidity);
-  u8g2.print(" %");
+  u8g2.print("Suhu Air: ");
+  u8g2.print(temperatureC);
+  u8g2.print(" C");
   u8g2.setCursor(0, 45);
   u8g2.print("Level Air: ");
   u8g2.print(waterLevel);
